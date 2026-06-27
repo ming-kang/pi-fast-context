@@ -4,7 +4,14 @@
 	"description": "Pi-native semantic code search via Devin/Windsurf's reverse-engineered swe-grep protocol. Unofficial — bring your own Devin key.",
 	"type": "module",
 	"keywords": ["pi-package"],
+	"homepage": "https://github.com/ming-kang/pi-fast-context#readme",
+	"bugs": "https://github.com/ming-kang/pi-fast-context/issues",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ming-kang/pi-fast-context.git"
+	},
 	"license": "MIT",
+	"author": "ming-kang",
 	"peerDependencies": {
 		"@earendil-works/pi-agent-core": "*",
 		"@earendil-works/pi-ai": "*",

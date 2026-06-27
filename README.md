@@ -4,7 +4,9 @@ Fast Context is a semantic code search tool for Pi. It takes your search query a
 
 Unlike local-only search, Fast Context understands intent: "where is authentication handled?" returns relevant functions and call sites, not just grep matches. Results are returned with inline code (including line numbers), so you often get your answer in one shot.
 
-This is an official Pi extension with zero runtime dependencies: it reuses Pi's built-in ripgrep, respects `.gitignore`, and runs all path operations in a strict sandbox.
+> **Unofficial.** This is a third-party, zero-dependency Pi extension. It talks to Devin/Windsurf's `swe-grep` backend over a **reverse-engineered** protocol, so you must bring your own Devin API key, and the backend can change or break it at any time without notice. Not affiliated with or endorsed by Pi, Devin, or Windsurf.
+
+Apart from that one backend call, everything runs locally: it reuses Pi's built-in ripgrep, respects `.gitignore`, and runs all path operations in a strict sandbox.
 
 ## Requirements
 
