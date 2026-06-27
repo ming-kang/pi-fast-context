@@ -4,25 +4,26 @@ Fast Context is a semantic code search tool for Pi. It takes your search query a
 
 Unlike local-only search, Fast Context understands intent: "where is authentication handled?" returns relevant functions and call sites, not just grep matches. Results are returned with inline code (including line numbers), so you often get your answer in one shot.
 
-> **Unofficial.** This is a third-party, zero-dependency Pi extension. It talks to Devin/Windsurf's `swe-grep` backend over a **reverse-engineered** protocol, so you must bring your own Devin API key, and the backend can change or break it at any time without notice. Not affiliated with or endorsed by Pi, Devin, or Windsurf.
+Here's how it works: Fast Context sends your query and a map of your project to Devin's hosted code-search backend over a **reverse-engineered** protocol; the backend plans a sequence of search commands that this extension then runs locally. You bring your own Devin API key — the free tier works, and paid tiers unlock additional models — and because the integration is unofficial, the backend can change or break it at any time without notice. Not affiliated with or endorsed by Pi or Devin.
 
 Apart from that one backend call, everything runs locally: it reuses Pi's built-in ripgrep, respects `.gitignore`, and runs all path operations in a strict sandbox.
 
-## Requirements
-
-- Pi >= 0.80 (as the extension host)
-- A Devin account with API key access (free tier is fine; paid tier supports additional models)
-- No separate ripgrep installation needed — Pi provides it
-
-## Installation
+## Installation & Update
 
 ```bash
 pi install git:github.com/ming-kang/pi-fast-context
-# or from local checkout during development:
+# or from a local checkout during development:
 pi install ./pi-fast-context
 ```
 
-Local checkout does not auto-run `npm install`, but that's fine — this package has zero runtime dependencies.
+A local checkout does not auto-run `npm install`, but that's fine — this package has zero runtime dependencies.
+
+Update:
+
+```bash
+pi update --extensions                                # update all installed packages
+pi update git:github.com/ming-kang/pi-fast-context    # update only this one
+```
 
 ## Configuring your API key
 
@@ -32,7 +33,7 @@ Run `/fast-context` to open the key configuration dialog:
 - Submit empty to delete a saved key
 - Press Escape to cancel
 
-The key is stored persistently in `~/.pi/agent/fast-context/config.json` (mode 0600), loaded on startup, and never passed to the model or written to session logs.
+The key is stored persistently in `~/.pi/agent/fast-context/config.json`, loaded on startup, and never passed to the model or written to session logs.
 
 For headless/CI environments, set the `FAST_CONTEXT_KEY` environment variable instead. If not set, the tool will use the saved key from `config.json`.
 
@@ -76,7 +77,7 @@ The remote model plans commands, but execution is sandboxed locally. All securit
 ## Environment Variables
 
 | Variable | Default | Description |
-|---|---|---|
+|:-:|---|---|
 | `FAST_CONTEXT_KEY` | — | API key at startup (useful for headless/CI) |
 | `WS_MODEL` | MODEL_SWE_1_6_FAST | Backend model; paid tier can switch to swe-grep |
 | `WS_APP_VER` | 1.48.2 | Protocol metadata: app version |
@@ -116,4 +117,4 @@ Zero runtime dependencies: all peer dependencies resolve to Pi's bundled version
 
 ## License
 
-MIT
+[MIT](LICENSE)
