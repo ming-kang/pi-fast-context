@@ -19,7 +19,7 @@ A Pi-native semantic code-search extension. A remote backend plans a sequence of
 
 - **`sandbox.ts` (`PathSandbox`) is the security core.** Every model-supplied path (rg / readfile / tree / ls / glob + answer paths) maps through `toReal()`, checked **lexically** (`..` traversal) **and after symlink resolution**; glob walks are re-vetted per entry via `contains()`.
 - **Minimal Pi surface:** only **three** modules import Pi — `storage.ts` (`getAgentDir`), `grep-backend.ts` (Pi's grep), and `execute.ts` (via grep-backend). Everything else is pure and node-testable. Inject dependencies (the `GrepFn` pattern); never add a Pi import to a pure module.
-- **Fragile backend boundary:** `client.ts` / `protocol.ts` speak a third-party `swe-grep` wire format that can change without notice. Protocol constants (`WS_APP_VER`, `WS_LS_VER`, `WS_MODEL`) are env-overridable; expect `403 / 429 / 413 / timeout`, classified in `classifyError`. Any change here needs live validation, not just selftests.
+- **Fragile backend boundary:** `client.ts` / `protocol.ts` speak a third-party `swe-grep` wire format that can change without notice. Protocol constants (`WS_APP_VER`, `WS_LS_VER`, `WS_MODEL`) are env-overridable for protocol drift/debugging only; do not present `WS_MODEL` as a user-facing model picker. Expect `403 / 429 / 413 / timeout`, classified in `classifyError`. Any change here needs live validation, not just selftests.
 
 ```
 src/

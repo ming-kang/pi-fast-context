@@ -30,7 +30,7 @@ const AUTH_BASE = "https://server.self-serve.windsurf.com/exa.auth_pb.AuthServic
 const WS_APP = "windsurf";
 const WS_APP_VER = process.env.WS_APP_VER || "1.48.2";
 const WS_LS_VER = process.env.WS_LS_VER || "1.9544.35";
-/** Default fast tier. Set WS_MODEL to switch (a paid Devin key unlocks other models). */
+/** Default backend model id. WS_MODEL is an escape hatch for protocol drift, not a user-facing model picker. */
 export const WS_MODEL = process.env.WS_MODEL || "MODEL_SWE_1_6_FAST";
 
 const USER_AGENT = "connect-go/1.18.1 (go1.25.5)";

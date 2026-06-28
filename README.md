@@ -1,12 +1,14 @@
 # Fast Context for Pi
 
-Fast Context is a semantic code search tool for Pi. It takes your search query and a compact map of the project, analyzes them with a remote model, then executes a series of commands locally to find relevant files and line ranges.
+Fast Context is a semantic code retrieval tool for Pi. It takes a task-level search query and a compact map of the current project, asks Devin's Fast Context backend to plan a small search, then executes that search locally to return relevant files and line ranges.
 
-Unlike local-only search, Fast Context understands intent: "where is authentication handled?" returns relevant functions and call sites, not just grep matches. Results are deliberately lightweight: file paths, line ranges, and grep keywords. Pi should then use `read` for the exact code it needs.
+[Devin's docs](https://docs.devin.ai/desktop/context-awareness/fast-context) describe Fast Context as a specialized subagent powered by the `SWE-grep` model family: `SWE-grep-mini` is the ultra-fast variant available to free users, while paid accounts may have access to the higher-intelligence `SWE-grep` backend. This Pi extension uses the same reverse-engineered protocol surface, but stays Pi-native around it and does not expose model selection as a normal user workflow.
 
-Here's how it works: Fast Context sends your query and a hotspot repo map to Devin's hosted code-search backend over a **reverse-engineered** protocol; the backend plans a sequence of search commands that this extension then runs locally. You bring your own Devin API key — the free tier works, and paid tiers unlock additional models — and because the integration is unofficial, the backend can change or break it at any time without notice. Not affiliated with or endorsed by Pi or Devin.
+Unlike local-only grep, Fast Context understands intent: "where is authentication handled?" can return the handler, middleware, session code, and relevant call sites even when they do not share one exact token. Results are deliberately lightweight: candidate file paths, line ranges, and grep keywords. Pi should then use `read` and `grep` for the exact code and evidence it needs.
 
-Apart from that backend planning call, everything runs locally: it reuses Pi's built-in ripgrep, respects `.gitignore`, ranks likely hotspot directories locally, and runs all path operations in a strict sandbox.
+Here's how it works: Fast Context sends your query and a hotspot repo map to Devin's hosted code-search backend over a **reverse-engineered** protocol; the backend plans a sequence of restricted search commands; this extension runs those commands locally. You bring your own Devin API key. Because the integration is unofficial, the backend can change or break it at any time without notice. Not affiliated with or endorsed by Pi or Devin.
+
+Apart from that backend planning call, execution stays local: it reuses Pi's built-in ripgrep, respects `.gitignore`, ranks likely hotspot directories locally, and runs all path operations in a strict sandbox.
 
 ## Installation & Update
 
@@ -37,13 +39,31 @@ The key is stored persistently in `~/.pi/agent/fast-context/config.json`, loaded
 
 For headless/CI environments, set the `FAST_CONTEXT_KEY` environment variable instead. If not set, the tool will use the saved key from `config.json`.
 
-Current Devin tokens look like `devin-session-token$<JWT>`. If you set that value through a shell or config file, quote or escape the `$`; otherwise variable expansion can silently truncate the key. Fast Context warns when it detects that shape, but it never reads Devin/Windsurf local databases or tries to recover keys automatically.
+Pi Fast Context intentionally has no automatic credential discovery. Users configure a key manually through `/fast-context` or `FAST_CONTEXT_KEY`; the extension never reads Devin/Windsurf SQLite databases, IDE state, CLI credentials, or other local apps to recover a key.
+
+Current Devin tokens look like `devin-session-token$<JWT>`. If you set that value through a shell or config file, quote or escape the `$`; otherwise variable expansion can silently truncate the key. Fast Context warns when it detects that shape, but it still does not attempt to recover the key automatically.
 
 ## Usage
 
-Once you've set your key, the tool becomes available to the model. It's designed for exploratory search: when you don't know which files contain what you're looking for. For known symbols or filenames, use Pi's built-in `grep`, `read`, or `find` instead.
+Once you've set your key, Pi can call Fast Context when it needs a fast starting context for unfamiliar local code. Users do not normally call this tool by hand.
 
-Results include paths, line ranges, and grep keywords only. Pi should use `read` with the returned paths and ranges when it needs the actual code.
+Good use cases:
+
+- Understanding a large or unfamiliar repo before implementing a feature
+- Finding where a cross-module behavior lives, such as auth, session restore, tool rendering, or config loading
+- Tracing a bug flow when the relevant files are unknown
+- Getting an initial reading list for architecture exploration or refactor planning
+
+Poor use cases:
+
+- Exact symbols, filenames, literals, or known paths: use `grep`, `find`, or `read`
+- Small known scopes where local tools are faster
+- Freshness-sensitive external facts: this only searches the local checkout
+- Proof that something exists or does not exist: verify with local `grep`/`read`
+
+Write queries as short natural-language problem statements, preferably in English, with domain terms when useful. For example: "where is session resume and conversation persistence implemented?" works better than `resume`.
+
+Results include paths, line ranges, and grep keywords only. Treat returned files as candidate context, not proof. Pi should use `read` with the returned paths/ranges and use the grep keywords for follow-up verification.
 
 In the TUI, you'll see real-time progress: authentication, building the repo map, and each planning/execution round. Results display collapsed by default (showing file count and grep keywords), and expand to show the full result envelope.
 
@@ -51,12 +71,12 @@ In the TUI, you'll see real-time progress: authentication, building the repo map
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `query` | string | required | What code or behavior to find |
-| `project_path` | string | cwd | Subdirectory to search within (must be inside cwd) |
-| `tree_depth` | int 0-6 | 3 | Repo-map depth. `0` chooses automatically from project size. In hotspot mode, higher values deepen hotspot subtrees |
-| `max_turns` | int 1-5 | 3 | Search rounds. More = deeper but slower |
-| `max_results` | int 1-30 | 10 | Maximum files to return |
-| `exclude_paths` | string[] | [] | Directories/files to exclude from the repo map |
+| `query` | string | required | Natural-language code retrieval query. Prefer English plus local domain terms; avoid bare exact symbols |
+| `project_path` | string | cwd | Optional package/subtree to search within (must resolve inside cwd). Narrow this for monorepos |
+| `tree_depth` | int 0-6 | 3 | Repo-map depth. `0` chooses automatically from project size. Use 1-2 for huge repos, 4-6 only for small focused repos |
+| `max_turns` | int 1-5 | 3 | Search rounds. Use 1-2 for quick orientation, 3 normally, 4-5 for complex cross-module flows |
+| `max_results` | int 1-30 | 10 | Maximum files to return. Use 3-8 for focused implementation work |
+| `exclude_paths` | string[] | [] | Extra directories/files to exclude from the repo map and hotspot scoring, on top of defaults and simple `.gitignore` dirs |
 
 ## Security and Guarantees
 
@@ -73,8 +93,10 @@ The remote model plans commands, but execution is sandboxed locally. All securit
 
 - **Single glob:** Pi's grep accepts one glob pattern, so multiple include/exclude patterns are simplified to the first include. Default exclusions overlap significantly with .gitignore, so practical impact is small.
 - **Remote-dependent:** Each search involves multiple network rounds. Quality depends on the directory tree and backend model decisions — not equivalent to semantic vector indexing. Position this as "exploratory code search accelerator", not the only code search entry point.
+- **Semantic, not exact:** Fast Context can return near matches for symbol-like queries. Use local `grep` for exact existence, definitions, and literal strings.
 - **Hotspot repo map:** The default map sends a shallow whole-repo tree plus deeper subtrees for locally ranked hotspot directories. If that adds latency on a huge repo, set `FC_REPO_MAP_MODE=classic` to use the old adaptive flat tree.
-- **Lightweight results:** The tool returns pointers, not code. This keeps the model-facing result small; use Pi's `read` tool for the selected ranges.
+- **Grep keywords are hints:** The returned keywords are useful follow-up searches, not proof that a file is relevant.
+- **Lightweight results:** The tool returns pointers, not code. This keeps the result small; use Pi's `read` tool for the selected ranges.
 
 
 ## Environment Variables
@@ -82,7 +104,7 @@ The remote model plans commands, but execution is sandboxed locally. All securit
 | Variable | Default | Description |
 |:-:|---|---|
 | `FAST_CONTEXT_KEY` | — | API key at startup (useful for headless/CI) |
-| `WS_MODEL` | MODEL_SWE_1_6_FAST | Devin backend model; paid tiers may unlock other model ids |
+| `WS_MODEL` | MODEL_SWE_1_6_FAST | Backend protocol model id escape hatch. Leave unset unless the upstream protocol changes or you are debugging the wire |
 | `WS_APP_VER` | 1.48.2 | Devin/Windsurf protocol metadata: app version |
 | `WS_LS_VER` | 1.9544.35 | Devin/Windsurf protocol metadata: language server version |
 | `FC_MAX_COMMANDS` | 8 | Max parallel commands per round |
