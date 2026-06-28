@@ -1,8 +1,8 @@
 /**
  * Pi-facing orchestration: resolve + confine the project path, wire rg to Pi's
  * grep, run the search, and return both the text envelope and structured
- * details for rendering. This is the second (and last) module that imports Pi,
- * via grep-backend.ts.
+ * details for rendering. This is one of the three modules that touch Pi; the
+ * actual grep import is isolated in grep-backend.ts.
  */
 import { isAbsolute, resolve } from "node:path";
 import { createPiGrepFn } from "./grep-backend.ts";
@@ -22,6 +22,11 @@ function clampParam(v: unknown, def: number, min: number, max: number): number {
 
 const MAX_COMMANDS = clampEnv("FC_MAX_COMMANDS", 8, 1, 8);
 const TIMEOUT_MS = clampEnv("FC_TIMEOUT_MS", 30000, 5000, 120000);
+const REPO_MAP_MODE = process.env.FC_REPO_MAP_MODE === "classic" ? "classic" : "hotspot";
+const HOTSPOT_BASE_DEPTH = clampEnv("FC_HOTSPOT_BASE_DEPTH", 1, 1, 4);
+const HOTSPOT_TOP_K = clampEnv("FC_HOTSPOT_TOP_K", 4, 1, 10);
+const HOTSPOT_TREE_DEPTH = clampEnv("FC_HOTSPOT_TREE_DEPTH", 2, 1, 6);
+const HOTSPOT_MAX_BYTES = clampEnv("FC_HOTSPOT_MAX_BYTES", 120 * 1024, 16 * 1024, 250 * 1024);
 
 export interface FastContextParams {
 	query?: string;
@@ -69,7 +74,7 @@ export async function runFastContextSearch(
 		projectRoot = candidate;
 	}
 
-	const treeDepth = clampParam(params.tree_depth, 3, 1, 6);
+	const treeDepth = clampParam(params.tree_depth, 3, 0, 6);
 	const maxTurns = clampParam(params.max_turns, 3, 1, 5);
 	const maxResults = clampParam(params.max_results, 10, 1, 30);
 	const excludePaths = Array.isArray(params.exclude_paths)
@@ -87,6 +92,11 @@ export async function runFastContextSearch(
 		treeDepth,
 		timeoutMs: TIMEOUT_MS,
 		excludePaths,
+		repoMapMode: REPO_MAP_MODE,
+		hotspotBaseDepth: HOTSPOT_BASE_DEPTH,
+		hotspotTopK: HOTSPOT_TOP_K,
+		hotspotTreeDepth: HOTSPOT_TREE_DEPTH,
+		hotspotMaxBytes: HOTSPOT_MAX_BYTES,
 		signal,
 		onProgress,
 	});

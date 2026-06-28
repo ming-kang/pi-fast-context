@@ -1,8 +1,9 @@
 /**
- * The swe-grep system prompt + tool schema, ported verbatim from upstream
- * core.mjs. These strings are tuned for the backend model, so they are
- * reproduced exactly (including the `{{`/`}}` in the example and the `{max_*}`
- * placeholders that buildSystemPrompt fills in).
+ * Devin backend system prompt + tool schema, ported verbatim from upstream
+ * core.mjs. The backend still speaks the swe-grep protocol, and these strings
+ * are tuned for that model, so they are reproduced exactly (including the
+ * `{{`/`}}` in the example and the `{max_*}` placeholders that buildSystemPrompt
+ * fills in).
  */
 
 const SYSTEM_PROMPT_TEMPLATE = `You are an expert software engineer, responsible for providing context \

@@ -11,9 +11,9 @@ export const FastContextParamsSchema = Type.Object({
 	),
 	tree_depth: Type.Optional(
 		Type.Integer({
-			minimum: 1,
+			minimum: 0,
 			maximum: 6,
-			description: "Repo-map tree depth (1-6, default 3). Use 1-2 for huge monorepos, 4-6 for small projects.",
+			description: "Repo-map tree depth (0-6, default 3; 0 = auto from project size). Use 1-2 for huge monorepos, 4-6 for small projects.",
 		}),
 	),
 	max_turns: Type.Optional(

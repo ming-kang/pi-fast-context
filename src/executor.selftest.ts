@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type GrepFn, ToolExecutor } from "./executor.ts";
 import { PathSandbox } from "./sandbox.ts";
-import { buildRepoMap, renderTree } from "./tree.ts";
+import { renderTree } from "./tree.ts";
 
 const root = mkdtempSync(join(tmpdir(), "fc-exec-"));
 mkdirSync(join(root, "sub"), { recursive: true });
@@ -71,13 +71,11 @@ assert.match(await ex.rg("xyz", "/codebase/../..", null), /outside project root/
 	assert.ok(out.includes("1:line1"), "command1 output");
 }
 
-// tree.ts — repo map applies default excludes (hides node_modules), depth fits.
+// tree.ts — renderTree root label + structure (repo-map assembly lives in repo-map.selftest).
 {
-	const map = buildRepoMap(root, "/codebase", 3);
-	assert.ok(map.tree.includes("a.ts") && map.tree.includes("sub"), "repo map entries");
-	assert.ok(!map.tree.includes("node_modules"), "repo map hides node_modules");
-	assert.equal(map.depth, 3, "repo map depth");
-	assert.equal(renderTree(root, "/codebase", { maxDepth: 1 }).split("\n")[0], "/codebase", "renderTree root line");
+	const t = renderTree(root, "/codebase", { maxDepth: 2 });
+	assert.equal(t.split("\n")[0], "/codebase", "renderTree root line");
+	assert.ok(t.includes("a.ts") && t.includes("sub"), "renderTree entries");
 }
 
 console.log("OK executor self-test passed");

@@ -1,21 +1,24 @@
 /**
- * Native directory-tree rendering + adaptive repo map.
+ * Native directory-tree rendering — a plain `node:fs` walk that replaces the
+ * upstream `tree-node-cli` dependency, keeping this package dependency-free.
  *
- * Replaces the upstream `tree-node-cli` dependency with a plain `node:fs` walk,
- * keeping this package dependency-free. Used both for the `tree` restricted
- * command and for the initial repo map sent to the swe-grep backend.
+ * This module is the low-level renderer used by the `tree` restricted command
+ * (executor.ts) and by the repo-map builder (repo-map.ts), which assembles the
+ * orientation map sent to Devin's backend. The exclude helpers below are shared
+ * with repo-map.ts so the classic and hotspot maps hide the same noise dirs.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-const MAX_TREE_BYTES = 250 * 1024;
+/** Payload budget for a rendered repo map (~server limit minus overhead). */
+export const MAX_TREE_BYTES = 250 * 1024;
 
 /**
  * Noise directories hidden from the repo map by default. The model can still
  * search inside them with an explicit rg path — this only declutters the
  * orientation tree (and keeps it under the payload cap).
  */
-const DEFAULT_EXCLUDES = [
+export const DEFAULT_EXCLUDES = [
 	"node_modules",
 	".git",
 	"dist",
@@ -50,7 +53,7 @@ const DEFAULT_EXCLUDES = [
  * (like DEFAULT_EXCLUDES), so root-anchored patterns like `/dist` apply repo-wide;
  * for an orientation tree that is the desired behavior.
  */
-function gitignoreDirNames(realRoot: string): string[] {
+export function gitignoreDirNames(realRoot: string): string[] {
 	const names: string[] = [];
 	for (const rel of [".gitignore", join(".git", "info", "exclude")]) {
 		let text: string;
@@ -108,31 +111,4 @@ export function renderTree(realRoot: string, label: string, opts: TreeOptions = 
 
 	walk(realRoot, 0, "");
 	return lines.join("\n");
-}
-
-export interface RepoMap {
-	tree: string;
-	depth: number;
-	sizeBytes: number;
-	fellBack: boolean;
-}
-
-/**
- * Build the repo map at `targetDepth`, automatically falling back to shallower
- * depths until the rendered tree fits under the ~250KB payload budget.
- */
-export function buildRepoMap(realRoot: string, label: string, targetDepth = 3, excludePaths: string[] = []): RepoMap {
-	const excludeSet = new Set([...DEFAULT_EXCLUDES, ...gitignoreDirNames(realRoot), ...excludePaths]);
-	const exclude = (name: string) => excludeSet.has(name);
-
-	for (let depth = targetDepth; depth >= 1; depth--) {
-		const tree = renderTree(realRoot, label, { maxDepth: depth, exclude });
-		const sizeBytes = Buffer.byteLength(tree, "utf-8");
-		if (sizeBytes <= MAX_TREE_BYTES) {
-			return { tree, depth, sizeBytes, fellBack: depth < targetDepth };
-		}
-	}
-
-	const tree = renderTree(realRoot, label, { maxDepth: 1, exclude });
-	return { tree, depth: 1, sizeBytes: Buffer.byteLength(tree, "utf-8"), fellBack: true };
 }

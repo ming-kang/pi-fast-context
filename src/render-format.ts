@@ -53,9 +53,6 @@ export function colorizeEnvelope(text: string, theme: Theme): string {
 				return `${m[1]}${theme.fg("dim", m[2]!)} ${theme.fg("dim", m[3]!)} ${theme.fg("toolOutput", m[4]!)}`;
 			}
 
-			// Indented snippet notices: truncation "…" or "(snippet unavailable: …)"
-			if (/^\s+(…|\(snippet unavailable)/.test(line)) return theme.fg("muted", line);
-
 			// Header / empty-result lines
 			if (/^Found \d+ relevant/.test(line) || /^No (relevant files found|files found)/.test(line))
 				return theme.fg("toolTitle", line);

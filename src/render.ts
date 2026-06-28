@@ -6,7 +6,7 @@
  *   • call      → ● Fast Context(query · scope)
  *   • partial   → ● Fast Context · <live progress>   (streamed via onUpdate)
  *   • collapsed → │ N files · grep: …  (+ expand hint)  /  one-line error
- *   • expanded  → colorized envelope: file headers, line-numbered code, notes
+ *   • expanded  → colorized envelope: file headers, grep keywords, config notes
  */
 import type { AgentToolResult, Theme, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { keyHint } from "@earendil-works/pi-coding-agent";
@@ -41,7 +41,7 @@ export function renderResult(
 
 	// Live progress streamed from search() via onUpdate.
 	if (options.isPartial) {
-		const msg = text.trim() || "Consulting swe-grep…";
+		const msg = text.trim() || "Consulting Devin…";
 		return new Text(activeDotLine(TOOL_LABEL, ` · ${msg}`, theme), 0, 0);
 	}
 

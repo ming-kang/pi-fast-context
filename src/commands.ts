@@ -6,6 +6,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CMD, TOOL_LABEL } from "./constants.ts";
+import { looksTruncated, TRUNCATED_KEY_HINT } from "./key-format.ts";
 import { reconcileFastContextTool } from "./reconcile.ts";
 import { clearApiKey, getApiKey, setApiKey } from "./state.ts";
 import { keyFilePath } from "./storage.ts";
@@ -50,6 +51,9 @@ export function registerCommands(pi: ExtensionAPI): void {
 
 			setApiKey(trimmed);
 			reconcileFastContextTool(pi);
+			if (looksTruncated(trimmed)) {
+				ctx.ui.notify(`${TOOL_LABEL}: ${TRUNCATED_KEY_HINT}`, "warning");
+			}
 			ctx.ui.notify(`${TOOL_LABEL} key saved — tool enabled → ${keyFilePath()}`, "info");
 		},
 	});

@@ -1,13 +1,12 @@
 /**
- * pi-fast-context — Pi-native semantic code search via Devin/Windsurf's
- * reverse-engineered swe-grep protocol.
+ * pi-fast-context — Pi-native semantic code search via Devin's hosted backend.
  *
  * Registers the `fast_context_search` tool plus key-management commands. The
  * Devin key is held in memory only and cleared on session shutdown.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerCommands } from "./commands.ts";
-import { CMD, PROMPT_GUIDELINES, PROMPT_SNIPPET, TOOL_DESCRIPTION, TOOL_LABEL, TOOL_NAME } from "./constants.ts";
+import { PROMPT_GUIDELINES, PROMPT_SNIPPET, TOOL_DESCRIPTION, TOOL_LABEL, TOOL_NAME } from "./constants.ts";
 import { runFastContextSearch } from "./execute.ts";
 import { reconcileFastContextTool } from "./reconcile.ts";
 import { renderCall, renderResult } from "./render.ts";
@@ -31,14 +30,14 @@ export default function fastContext(pi: ExtensionAPI): void {
 					content: [
 						{
 							type: "text",
-							text: `Error: no ${TOOL_LABEL} key set. Ask the user to run /${CMD} and paste their Devin key.`,
+							text: `Error: ${TOOL_LABEL} is not available in this session.`,
 						},
 					],
-					details: { errorMessage: "no api key" },
+					details: { errorMessage: "tool unavailable" },
 				};
 			}
 
-			onUpdate?.({ content: [{ type: "text", text: "Consulting swe-grep…" }], details: {} });
+			onUpdate?.({ content: [{ type: "text", text: "Consulting Devin…" }], details: {} });
 			const onProgress = (msg: string) => onUpdate?.({ content: [{ type: "text", text: msg }], details: {} });
 			const { text, details } = await runFastContextSearch(params, apiKey, ctx.cwd, signal, onProgress);
 			return { content: [{ type: "text", text }], details };

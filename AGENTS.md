@@ -1,6 +1,6 @@
 # Package Contract
 
-A Pi-native semantic code-search extension. A remote backend plans a sequence of restricted filesystem commands; this extension runs them locally and returns files, line ranges, inlined code, and grep keywords. **The remote side plans commands that execute on the user's machine — so the entire security boundary lives in this extension, not in any remote prompt.** Read this before touching `src/`.
+A Pi-native semantic code-search extension. A remote backend plans a sequence of restricted filesystem commands; this extension runs them locally and returns files, line ranges, and grep keywords. **The remote side plans commands that execute on the user's machine — so the entire security boundary lives in this extension, not in any remote prompt.** Read this before touching `src/`.
 
 ## Build & Test
 
@@ -9,6 +9,9 @@ A Pi-native semantic code-search extension. A remote backend plans a sequence of
   - `node src/sandbox.selftest.ts` — path containment (security core)
   - `node src/executor.selftest.ts` — restricted command execution
   - `node src/protocol.selftest.ts` — protobuf / Connect-RPC framing
+  - `node src/directory-scorer.selftest.ts` — local hotspot scoring
+  - `node src/repo-map.selftest.ts` — classic/hotspot repo-map assembly
+  - `node src/key-format.selftest.ts` — Devin key truncation heuristic
 - **Load:** `pi -ne -e ./pi-fast-context`.
 - **Live wire:** `client.ts` / `protocol.ts` changes need a real search + `<ANSWER>` round-trip — selftests can't cover the wire. (`render-format.ts` is pure, so colorization is unit-testable too.)
 
@@ -28,9 +31,11 @@ src/
   commands.ts       /fast-context: set / clear key
   reconcile.ts      Toggle the tool in/out of the active set by key presence
   execute.ts        Pi-facing orchestration: confine project_path, run search, build envelope
-  search.ts         swe-grep search loop, range code-inlining, result formatting
+  search.ts         Devin backend search loop and lightweight result formatting
+  repo-map.ts       Classic/hotspot repo-map assembly
+  directory-scorer.ts  Local hotspot scoring (BM25F + injected grep probe)
   executor.ts       Restricted command execution (rg/readfile/tree/ls/glob), every path sandboxed
-  tree.ts           Native directory tree + adaptive repo map
+  tree.ts           Native directory-tree renderer
   sandbox.ts        Path containment (security core)
   grep-backend.ts   The one wrapper around Pi's grep (reuses Pi's ripgrep)
   render.ts         Self-render: call / partial (live) / collapsed / expanded
@@ -44,6 +49,8 @@ src/
 - **Zero runtime dependencies.** `package.json` carries only `peerDependencies`. rg → Pi's grep; fs/tree/ls/glob → `node:fs`; framing → `node:zlib`; schema → typebox (peerDep).
 - Relative imports use the **`.ts`** suffix — never `.js`.
 - **Clamp every env/param knob** (`clampEnv` / `clampParam`: finite + min/max); document defaults in the README's env table.
+- **Lightweight only.** Results should stay paths + line ranges + grep keywords; Pi can use `read` for the returned ranges.
+- **Keep scorer dependency-free.** `directory-scorer.ts` reimplements `splitByCase`; do not add `scule`, `@vscode/ripgrep`, or Git-history spawning for the hotspot path without a deliberate design review.
 - **Key-gated visibility:** the tool is always registered but toggled into the active set by `reconcile.ts` only when a key exists (mirrors advisor's reconcile). With no key it is invisible to the model.
 - **Honest model-facing copy:** position the tool as one option (network round-trips against a third party), not a mandatory first step.
 
@@ -54,7 +61,7 @@ Non-negotiable security invariants. Weakening any one is a regression, however c
 ### NEVER
 - Pass a model-supplied path to `node:fs` without `toReal()` first; absolute paths from the model are rejected outright.
 - Set `NODE_TLS_REJECT_UNAUTHORIZED=0` — no TLS downgrade; this runs inside a shared Pi host.
-- Read the backend vendor's local state (SQLite, CLI creds, IDE DBs) or offer any key-extraction tool.
+- Read the backend vendor's local state (SQLite, CLI creds, IDE DBs) or offer any key-extraction tool. Do not port upstream's local key extraction.
 - Log the API key, write it to session JSONL, or pass it as an LLM tool parameter.
 - Let `project_path` escape cwd.
 - Add a Pi import to a pure module, add a runtime `dependency`, or write a `.js` specifier.

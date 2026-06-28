@@ -1,5 +1,10 @@
 /**
- * swe-grep backend client — auth, request building, streaming, response parsing.
+ * Devin backend client — auth, request building, streaming, response parsing.
+ *
+ * Talks to Devin's hosted swe-grep service. Devin is the same team's continuation
+ * of Windsurf and runs on the same self-serve infrastructure, so the wire format
+ * (endpoint host, `windsurf` app id, protocol-metadata versions) is unchanged —
+ * those are kept verbatim as handshake fields, not branding.
  *
  * Ported from the upstream fast-context-mcp `core.mjs` network layer, with the
  * unsafe/invasive bits removed:
@@ -16,13 +21,16 @@ import { arch, cpus, hostname, platform, release, totalmem, version as osVersion
 import { gzipSync } from "node:zlib";
 import { ProtobufEncoder, connectFrameDecode, connectFrameEncode, extractStrings } from "./protocol.ts";
 
-// ─── Protocol constants (backend may rev these; allow env override) ──────────
+// ─── Protocol constants (Devin's swe-grep handshake; backend may rev these) ──
+// Endpoint host and `windsurf` app id are the shared Windsurf/Devin infra values —
+// kept verbatim because the server requires them. Env-overridable for when the
+// backend bumps versions.
 const API_BASE = "https://server.self-serve.windsurf.com/exa.api_server_pb.ApiServerService";
 const AUTH_BASE = "https://server.self-serve.windsurf.com/exa.auth_pb.AuthService";
 const WS_APP = "windsurf";
 const WS_APP_VER = process.env.WS_APP_VER || "1.48.2";
 const WS_LS_VER = process.env.WS_LS_VER || "1.9544.35";
-/** Default `swe-grep-mini` (free tier). Set WS_MODEL to switch (e.g. paid swe-grep). */
+/** Default fast tier. Set WS_MODEL to switch (a paid Devin key unlocks other models). */
 export const WS_MODEL = process.env.WS_MODEL || "MODEL_SWE_1_6_FAST";
 
 const USER_AGENT = "connect-go/1.18.1 (go1.25.5)";
@@ -331,10 +339,17 @@ export function parseToolCall(text: string): [string, string, Record<string, unk
 	if (end === 0) end = raw.length;
 
 	let args: Record<string, unknown>;
+	const jsonCandidate = raw.slice(0, end);
 	try {
-		args = JSON.parse(raw.slice(0, end));
+		args = JSON.parse(jsonCandidate);
 	} catch {
-		return null;
+		// Lenient fix: the model sometimes emits unquoted keys (`exclude":` →
+		// `"exclude":`). Quote bare keys and retry once before giving up.
+		try {
+			args = JSON.parse(jsonCandidate.replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":'));
+		} catch {
+			return null;
+		}
 	}
 	const thinking = text.slice(0, m.index ?? 0).trim();
 	return [thinking, name, args];

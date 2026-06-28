@@ -1,7 +1,7 @@
 {
 	"name": "pi-fast-context",
-	"version": "0.1.0",
-	"description": "Pi-native semantic code search via Devin's reverse-engineered swe-grep protocol. Unofficial — bring your own Devin key.",
+	"version": "0.2.0",
+	"description": "Pi-native semantic code search via Devin's reverse-engineered swe-grep protocol.",
 	"type": "module",
 	"keywords": ["pi-package"],
 	"homepage": "https://github.com/ming-kang/pi-fast-context#readme",

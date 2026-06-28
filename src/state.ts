@@ -5,9 +5,21 @@
  * state). Setting the key persists it; clearing removes the file.
  */
 import { clearJwtCache } from "./client.ts";
+import { isAcceptableApiKey, looksTruncated, TRUNCATED_KEY_HINT } from "./key-format.ts";
 import { deletePersistedKey, loadPersistedKey, savePersistedKey } from "./storage.ts";
 
-let apiKey: string | undefined = loadPersistedKey() ?? process.env.FAST_CONTEXT_KEY?.trim() ?? undefined;
+function warnIfTruncated(key: string | undefined, source: string): void {
+	if (key && looksTruncated(key)) {
+		console.warn(`[Fast Context] ${source} ${TRUNCATED_KEY_HINT}`);
+	}
+}
+
+const persistedKey = loadPersistedKey();
+const envKey = process.env.FAST_CONTEXT_KEY?.trim();
+warnIfTruncated(persistedKey, "saved key");
+if (!persistedKey) warnIfTruncated(envKey, "FAST_CONTEXT_KEY");
+
+let apiKey: string | undefined = persistedKey ?? (isAcceptableApiKey(envKey) ? envKey.trim() : undefined);
 
 export function getApiKey(): string | undefined {
 	return apiKey;
@@ -15,7 +27,8 @@ export function getApiKey(): string | undefined {
 
 export function setApiKey(key: string): void {
 	const next = key.trim();
-	if (!next) return;
+	if (!isAcceptableApiKey(next)) return;
+	warnIfTruncated(next, "new key");
 	if (apiKey && apiKey !== next) clearJwtCache(apiKey);
 	apiKey = next;
 	savePersistedKey(next);

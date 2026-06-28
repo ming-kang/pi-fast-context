@@ -1,14 +1,13 @@
 /**
- * The swe-grep search loop — ported from upstream core.mjs `search()`.
+ * Devin code-search loop — ported from upstream core.mjs `search()`.
  *
  * Stays Pi-agnostic: rg is supplied as an injected `grepFn`, so the whole loop
  * can be driven against the live backend in a standalone script (and wired to
  * Pi's grep in execute.ts). Includes the full robustness of upstream: adaptive
- * repo map, multi-turn with force-answer, no-valid-command turn compensation,
+ * hotspot repo map, multi-turn with force-answer, no-valid-command turn compensation,
  * payload/timeout context-trim retry, and error classification.
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
 	buildRequest,
@@ -22,8 +21,8 @@ import {
 } from "./client.ts";
 import { type GrepFn, type RestrictedCommand, ToolExecutor } from "./executor.ts";
 import { buildSystemPrompt, FINAL_FORCE_ANSWER, getToolDefinitions } from "./prompt.ts";
+import { buildRepoMap } from "./repo-map.ts";
 import { PathSandbox } from "./sandbox.ts";
-import { buildRepoMap } from "./tree.ts";
 
 const VIRTUAL_ROOT = "/codebase";
 
@@ -38,6 +37,13 @@ export interface SearchOptions {
 	treeDepth?: number;
 	timeoutMs?: number;
 	excludePaths?: string[];
+	/** Repo-map strategy (default "hotspot"). */
+	repoMapMode?: "classic" | "hotspot";
+	/** Hotspot tuning (env-sourced by execute.ts). */
+	hotspotBaseDepth?: number;
+	hotspotTopK?: number;
+	hotspotTreeDepth?: number;
+	hotspotMaxBytes?: number;
 	onProgress?: (msg: string) => void;
 	signal?: AbortSignal;
 }
@@ -48,14 +54,15 @@ export interface SearchFile {
 	/** Real absolute path, for the caller to read/grep next. */
 	fullPath: string;
 	ranges: Array<[number, number]>;
-	/** Inlined code per range (parallel to `ranges`); set by attachSnippets. */
-	snippets?: Snippet[];
 }
 
 export interface SearchMeta {
 	treeDepth: number;
 	treeSizeKB: number;
 	fellBack: boolean;
+	strategy?: "classic" | "hotspot";
+	hotDirs?: string[];
+	hotspotDepth?: number;
 	errorCode?: string;
 	contextTrimmed?: boolean;
 }
@@ -66,19 +73,56 @@ export interface SearchResult {
 	error?: string;
 	rawResponse?: string;
 	meta?: SearchMeta;
-	/** True when inline snippets were cut short by the total-line budget. */
-	snippetBudgetHit?: boolean;
 }
 
-/** Trim accumulated rounds to shrink the payload on retry. Keeps head + last 2. */
-function trimMessages(messages: ChatMessage[]): boolean {
-	if (messages.length <= 4) return false;
-	const head = messages.slice(0, 2);
-	const tail = messages.slice(-2);
+/**
+ * Trim accumulated rounds to shrink the payload on retry. Keeps the system
+ * prompt and the user problem statement (with the repo map compacted away),
+ * inserts a short summary, and preserves the most recent tool-call ↔ tool-result
+ * pair intact (the Devin/swe-grep protocol links them by id, so they must travel
+ * together). Returns true only if it actually shrank anything.
+ */
+function trimMessages(messages: ChatMessage[], query: string): boolean {
+	if (messages.length < 2) return false;
+	const system = messages[0]!;
+	const user = messages[1]!;
+
+	// Most recent tool-result and its matching tool-call (by id).
+	let resultIdx = -1;
+	let refId: string | undefined;
+	for (let i = messages.length - 1; i >= 2; i--) {
+		const m = messages[i]!;
+		if (m.role === 4 && m.ref_call_id) {
+			resultIdx = i;
+			refId = m.ref_call_id;
+			break;
+		}
+	}
+	let callIdx = -1;
+	if (refId) {
+		for (let i = resultIdx - 1; i >= 2; i--) {
+			if (messages[i]!.role === 2 && messages[i]!.tool_call_id === refId) {
+				callIdx = i;
+				break;
+			}
+		}
+	}
+	const tailStart = resultIdx === -1 ? Math.max(2, messages.length - 2) : callIdx !== -1 ? callIdx : Math.max(2, resultIdx - 1);
+	const tail = messages.slice(tailStart);
+
+	// The repo map in the user message is usually the largest single chunk.
+	const compactUser: ChatMessage = user.content.includes("Repo Map")
+		? { ...user, content: `Problem Statement: ${query}\n\nRepo Map: (omitted to reduce payload — use tree/rg to explore structure if needed).` }
+		: user;
+	const didCompact = compactUser.content.length < user.content.length;
+	const droppedHistory = tailStart > 2;
+	if (!didCompact && !droppedHistory) return false;
+
 	messages.length = 0;
 	messages.push(
-		...head,
-		{ role: 1, content: "[Prior search rounds omitted to reduce payload. Provide your best answer based on available context.]" },
+		system,
+		compactUser,
+		{ role: 1, content: "[Context trimmed to reduce payload. Continue from the most recent tool results below.]" },
 		...tail,
 	);
 	return true;
@@ -105,90 +149,6 @@ function parseAnswer(xmlText: string, sandbox: PathSandbox): SearchFile[] {
 	return files;
 }
 
-// ─── Inline code snippets ────────────────────────────────────────────────────
-
-function envInt(name: string, def: number, min: number, max: number): number {
-	const parsed = Number.parseInt(process.env[name] ?? "", 10);
-	if (!Number.isFinite(parsed)) return def;
-	return Math.min(max, Math.max(min, parsed));
-}
-
-/** Inlining is on by default; FC_SNIPPETS=0 falls back to pointers-only. */
-const SNIPPETS_ENABLED = process.env.FC_SNIPPETS !== "0";
-const SNIPPET_RANGE_MAX_LINES = envInt("FC_SNIPPET_RANGE_MAX_LINES", 80, 1, 1000);
-const SNIPPET_TOTAL_MAX_LINES = envInt("FC_SNIPPET_TOTAL_MAX_LINES", 400, 10, 5000);
-const SNIPPET_LINE_MAX_CHARS = envInt("FC_SNIPPET_LINE_MAX_CHARS", 250, 20, 10000);
-
-export interface Snippet {
-	start: number;
-	end: number;
-	/** Line-numbered, char-capped code; empty when error/omitted. */
-	text: string;
-	shownLines: number;
-	rangeLines: number;
-	/** Range was capped (per-range cap or remaining budget). */
-	truncated: boolean;
-	/** Range skipped entirely because the total budget was already spent. */
-	omitted: boolean;
-	error?: string;
-}
-
-/** Read one file's ranges off disk (fullPath is already sandbox-validated). */
-function readFileSnippets(file: SearchFile, cache: Map<string, string[] | null>, budget: { remaining: number }): Snippet[] {
-	let lines = cache.get(file.fullPath);
-	if (lines === undefined) {
-		try {
-			const buf = readFileSync(file.fullPath);
-			// Crude binary guard: a NUL byte in the first 8KB.
-			lines = buf.subarray(0, 8192).includes(0) ? null : buf.toString("utf-8").split("\n");
-		} catch {
-			lines = null;
-		}
-		cache.set(file.fullPath, lines);
-	}
-
-	return file.ranges.map(([rawStart, rawEnd]): Snippet => {
-		const start = Math.max(1, rawStart);
-		const end = Math.max(start, rawEnd);
-		const rangeLines = end - start + 1;
-		const base = { start, end, text: "", shownLines: 0, rangeLines, truncated: false, omitted: false };
-		if (lines === null) return { ...base, error: "unreadable or binary file" };
-		if (budget.remaining <= 0) return { ...base, truncated: true, omitted: true };
-
-		const cap = Math.min(rangeLines, SNIPPET_RANGE_MAX_LINES, budget.remaining);
-		const slice = lines.slice(start - 1, start - 1 + cap);
-		if (slice.length === 0) return { ...base, error: `range past end of file (${lines.length} lines)` };
-
-		const gutterW = String(start + slice.length - 1).length;
-		const text = slice
-			.map((ln, i) => {
-				const no = String(start + i).padStart(gutterW);
-				const capped = ln.length > SNIPPET_LINE_MAX_CHARS ? `${ln.slice(0, SNIPPET_LINE_MAX_CHARS)} …` : ln;
-				return `${no} │ ${capped}`;
-			})
-			.join("\n");
-		budget.remaining -= slice.length;
-		return { start, end, text, shownLines: slice.length, rangeLines, truncated: slice.length < rangeLines, omitted: false };
-	});
-}
-
-/**
- * Read the answer files' ranges and attach them as `file.snippets`, sharing one
- * total-line budget across the whole result. Returns true if the budget forced
- * any range to be omitted (so the caller can surface a note).
- */
-export function attachSnippets(files: SearchFile[]): boolean {
-	if (!SNIPPETS_ENABLED) return false;
-	const cache = new Map<string, string[] | null>();
-	const budget = { remaining: SNIPPET_TOTAL_MAX_LINES };
-	let budgetHit = false;
-	for (const file of files) {
-		file.snippets = readFileSnippets(file, cache, budget);
-		if (file.snippets.some((s) => s.omitted)) budgetHit = true;
-	}
-	return budgetHit;
-}
-
 export async function search(opts: SearchOptions): Promise<SearchResult> {
 	const {
 		query,
@@ -200,6 +160,11 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
 		treeDepth = 3,
 		timeoutMs = 30000,
 		excludePaths = [],
+		repoMapMode = "hotspot",
+		hotspotBaseDepth = 1,
+		hotspotTopK = 4,
+		hotspotTreeDepth = 2,
+		hotspotMaxBytes = 120 * 1024,
 		onProgress,
 	} = opts;
 	const log = (m: string) => onProgress?.(m);
@@ -218,13 +183,45 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
 
 	const toolDefs = getToolDefinitions(maxCommands);
 	const systemPrompt = buildSystemPrompt(maxTurns, maxCommands, maxResults);
-	const { tree: repoMap, depth: actualDepth, sizeBytes: treeSizeBytes, fellBack } = buildRepoMap(
-		sandbox.realRoot,
-		VIRTUAL_ROOT,
+
+	// Probe grep for the hotspot scorer — reuses Pi's grep and parses unique file
+	// paths from `path:line:` output. Best-effort: failures degrade to no signal.
+	const probeFn = async (pattern: string, sig?: AbortSignal): Promise<string[]> => {
+		let raw: string;
+		try {
+			raw = await grepFn(pattern, sandbox.realRoot, undefined, sig);
+		} catch {
+			return [];
+		}
+		const files = new Set<string>();
+		for (const line of raw.split("\n")) {
+			const m = line.match(/^(.+?):\d+:/);
+			if (m?.[1]) files.add(m[1]);
+		}
+		return [...files];
+	};
+
+	log("Mapping repo…");
+	const {
+		tree: repoMap,
+		depth: actualDepth,
+		hotspotDepth,
+		sizeBytes: treeSizeBytes,
+		fellBack,
+		strategy,
+		hotDirs,
+	} = await buildRepoMap(sandbox.realRoot, VIRTUAL_ROOT, {
+		mode: repoMapMode,
+		query,
 		treeDepth,
 		excludePaths,
+		probeFn,
+		hotspot: { baseDepth: hotspotBaseDepth, topK: hotspotTopK, hotspotDepth: hotspotTreeDepth, maxBytes: hotspotMaxBytes },
+		signal: opts.signal,
+	});
+	log(
+		`Mapped repo (${strategy}${hotDirs.length ? ` · hot: ${hotDirs.join(", ")}` : ""}, ${(treeSizeBytes / 1024).toFixed(1)}KB${fellBack ? ", fell back" : ""})`,
 	);
-	log(`Mapping repo (tree -L ${actualDepth}, ${(treeSizeBytes / 1024).toFixed(1)}KB${fellBack ? `, fell back from L${treeDepth}` : ""})`);
 
 	const userContent = `Problem Statement: ${query}\n\nRepo Map (tree -L ${actualDepth} /codebase):\n\`\`\`text\n${repoMap}\n\`\`\``;
 	const messages: ChatMessage[] = [
@@ -232,10 +229,15 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
 		{ role: 1, content: userContent },
 	];
 
+	let contextWasTrimmed = false;
 	const baseMeta = (): SearchMeta => ({
 		treeDepth: actualDepth,
 		treeSizeKB: +(treeSizeBytes / 1024).toFixed(1),
 		fellBack,
+		strategy,
+		hotDirs,
+		hotspotDepth,
+		contextTrimmed: contextWasTrimmed || undefined,
 	});
 
 	const totalApiCalls = maxTurns + 1;
@@ -245,7 +247,15 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
 
 	for (let turn = 0; turn < totalApiCalls + compensatedTurns; turn++) {
 		log(`Planning (turn ${turn + 1}/${totalApiCalls})`);
-		const proto = buildRequest(apiKey, jwt, messages, toolDefs);
+		let proto = buildRequest(apiKey, jwt, messages, toolDefs);
+
+		// Preflight: proactively trim if the payload is already large.
+		const MAX_PROTO_BYTES = 320 * 1024;
+		if (proto.length > MAX_PROTO_BYTES && trimMessages(messages, query)) {
+			contextWasTrimmed = true;
+			log("Trimming context before request (payload large)…");
+			proto = buildRequest(apiKey, jwt, messages, toolDefs);
+		}
 
 		let respData: Buffer;
 		try {
@@ -253,9 +263,9 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
 		} catch (e) {
 			const err = e instanceof FastContextError ? e : classifyError(e as Error);
 			const errCode = err.code;
-			if ((errCode === "PAYLOAD_TOO_LARGE" || errCode === "TIMEOUT") && messages.length > 4) {
+			if ((errCode === "PAYLOAD_TOO_LARGE" || errCode === "TIMEOUT") && trimMessages(messages, query)) {
+				contextWasTrimmed = true;
 				log(`${errCode === "TIMEOUT" ? "Timed out" : "Payload too large"} — trimming context, retrying…`);
-				trimMessages(messages);
 				try {
 					respData = await streamingRequest(buildRequest(apiKey, jwt, messages, toolDefs), timeoutMs);
 				} catch (retryErr) {
@@ -280,14 +290,11 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
 
 		if (toolName === "answer") {
 			const answerXml = typeof toolArgs.answer === "string" ? toolArgs.answer : "";
-			log("Reading code ranges…");
 			const files = parseAnswer(answerXml, sandbox);
-			const snippetBudgetHit = attachSnippets(files);
 			return {
 				files,
 				rgPatterns: [...new Set(executor.collectedRgPatterns)],
 				meta: baseMeta(),
-				snippetBudgetHit,
 			};
 		}
 
@@ -346,7 +353,7 @@ function hintFor(code?: string): string {
 	if (code === "PAYLOAD_TOO_LARGE" || code === "TIMEOUT")
 		return "\n[hint] Payload/timeout error. Try: reduce tree_depth, reduce max_turns, add exclude_paths, or narrow project_path to a subdirectory.";
 	if (code === "AUTH_ERROR")
-		return "\n[hint] Authentication error. The key may be expired or revoked. Run /fast-context to set a fresh Devin key.";
+		return "\n[hint] Fast Context authentication failed; the tool may need reconfiguration.";
 	if (code === "RATE_LIMITED") return "\n[hint] Rate limited. Wait a moment and retry.";
 	return "\n[hint] If the error is payload-related, try a lower tree_depth value or add exclude_paths.";
 }
@@ -360,6 +367,9 @@ export function formatSearchResult(result: SearchResult, fmt: FormatOptions): st
 			if (meta.fellBack) errMsg += " (auto fell back from requested depth)";
 			if (meta.contextTrimmed) errMsg += ", context_trimmed=true";
 			errMsg += `\n[config] max_turns=${fmt.maxTurns}, max_results=${fmt.maxResults}, max_commands=${fmt.maxCommands}, timeout_ms=${fmt.timeoutMs}`;
+			if (meta.strategy) errMsg += `, strategy=${meta.strategy}`;
+			if (meta.hotspotDepth) errMsg += `, hotspot_depth=${meta.hotspotDepth}`;
+			if (meta.hotDirs?.length) errMsg += `, hot=[${meta.hotDirs.join(", ")}]`;
 			if (fmt.excludePaths.length) errMsg += `, exclude_paths=[${fmt.excludePaths.join(", ")}]`;
 			errMsg += hintFor(meta.errorCode);
 		}
@@ -381,33 +391,22 @@ export function formatSearchResult(result: SearchResult, fmt: FormatOptions): st
 		files.forEach((entry, i) => {
 			const rangesStr = entry.ranges.map(([s, e]) => `L${s}-${e}`).join(", ");
 			parts.push(`  [${i + 1}/${n}] ${entry.fullPath}${rangesStr ? ` (${rangesStr})` : ""}`);
-			for (const sn of entry.snippets ?? []) {
-				if (sn.omitted) continue; // covered by the global budget note below
-				if (sn.error) {
-					parts.push(`      (snippet unavailable: ${sn.error})`);
-					continue;
-				}
-				if (!sn.text) continue;
-				for (const line of sn.text.split("\n")) parts.push(`      ${line}`);
-				if (sn.truncated)
-					parts.push(`      … (L${sn.start}-${sn.end}: showing first ${sn.shownLines} of ${sn.rangeLines} lines — read the rest with the read tool)`);
-			}
 		});
 	} else {
 		parts.push("No files found.");
 	}
-
-	if (result.snippetBudgetHit)
-		parts.push("", `[note] Inline snippets stopped at the ${SNIPPET_TOTAL_MAX_LINES}-line budget — read the remaining ranges with the read tool.`);
 
 	if (rgPatterns.length) parts.push("", `grep keywords: ${rgPatterns.join(", ")}`);
 
 	const meta = result.meta;
 	if (meta) {
 		const fb = meta.fellBack ? " (fell back from requested depth)" : "";
+		const hot = meta.hotDirs?.length ? `, hot=[${meta.hotDirs.join(", ")}]` : "";
+		const hotspotDepth = meta.hotspotDepth ? `, hotspot_depth=${meta.hotspotDepth}` : "";
+		const strategy = meta.strategy ? `, strategy=${meta.strategy}${hotspotDepth}${hot}` : "";
 		parts.push(
 			"",
-			`[config] tree_depth=${meta.treeDepth}${fb}, tree_size=${meta.treeSizeKB}KB, max_turns=${fmt.maxTurns}, max_results=${fmt.maxResults}, timeout_ms=${fmt.timeoutMs}${fmt.excludePaths.length ? `, exclude_paths=[${fmt.excludePaths.join(", ")}]` : ""}`,
+			`[config] tree_depth=${meta.treeDepth}${fb}, tree_size=${meta.treeSizeKB}KB${strategy}, max_turns=${fmt.maxTurns}, max_results=${fmt.maxResults}, timeout_ms=${fmt.timeoutMs}${fmt.excludePaths.length ? `, exclude_paths=[${fmt.excludePaths.join(", ")}]` : ""}`,
 		);
 	}
 

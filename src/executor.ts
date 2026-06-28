@@ -1,6 +1,6 @@
 /**
  * Restricted command executor — runs the rg/readfile/tree/ls/glob commands the
- * swe-grep backend plans, every path clamped through the sandbox.
+ * Devin backend plans, every path clamped through the sandbox.
  *
  * Differences from upstream `executor.mjs`:
  *   - rg is delegated through an injected `GrepFn` (wired to Pi's own grep tool

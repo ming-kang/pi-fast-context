@@ -1,7 +1,7 @@
 /**
  * Path sandbox — the security boundary for remotely-planned filesystem commands.
  *
- * The swe-grep backend plans paths (rg/readfile/tree/ls/glob) that we execute
+ * The Devin backend plans paths (rg/readfile/tree/ls/glob) that we execute
  * locally. The upstream executor mapped `/codebase`-rooted paths but passed any
  * other path through verbatim, and never re-checked `..` traversal after join —
  * so a planned `/codebase/../../etc/passwd` or an absolute path escaped the
