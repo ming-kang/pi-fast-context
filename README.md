@@ -1,4 +1,4 @@
-# pi-fast-context
+# Fast Context for Pi
 
 Fast Context is a semantic code search tool for Pi. It takes your search query and the project's directory structure, analyzes them with a remote model, then executes a series of commands locally to find and return relevant code snippets.
 
